@@ -1,0 +1,18 @@
+=== HYBRID OFFLINE EVALUATION ===
+Dataset mode: als_filtered
+Config dataset mode: als_filtered
+Eval random seed: 43
+Holdout size: 10
+Max profile tracks: 150
+Candidate eval users: 14410
+Excluded tuning users: 6760
+Tested users: 14410
+---------------------------------------------
+
+1. Hybrid Hit Rate @ 10: 32.65%
+2. Hybrid Precision @ 10: 5.33%
+3. Seen-history leaks in recommendations: 0
+4. Recommendation slots returned: 144100
+
+Alpha usage:
+- alpha=0.8: 14410 users

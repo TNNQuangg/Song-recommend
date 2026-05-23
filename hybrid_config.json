@@ -1,0 +1,143 @@
+{
+    "dataset_mode":  "als_filtered",
+    "random_seed":  42,
+    "holdout_size":  10,
+    "max_profile_tracks":  150,
+    "tuning_users_limit_per_bucket":  3000,
+    "alpha_candidates":  [
+                             0.0,
+                             0.2,
+                             0.4,
+                             0.6,
+                             0.8,
+                             1.0
+                         ],
+    "filtered_users":  21170,
+    "filtered_tracks":  11992,
+    "filtered_interactions":  508075,
+    "tuning_user_counts_by_bucket":  {
+                                         "under_25":  3000,
+                                         "under_50":  3000,
+                                         "over_50":  760
+                                     },
+    "best_alpha_under_25":  0.8,
+    "max_hit_rate_percent_under_25":  32.2,
+    "training_history_under_25":  [
+                                      {
+                                          "alpha":  0.0,
+                                          "hit_rate_percent":  9.37,
+                                          "hit_count":  281,
+                                          "tested_users":  3000
+                                      },
+                                      {
+                                          "alpha":  0.2,
+                                          "hit_rate_percent":  10.37,
+                                          "hit_count":  311,
+                                          "tested_users":  3000
+                                      },
+                                      {
+                                          "alpha":  0.4,
+                                          "hit_rate_percent":  21.57,
+                                          "hit_count":  647,
+                                          "tested_users":  3000
+                                      },
+                                      {
+                                          "alpha":  0.6,
+                                          "hit_rate_percent":  30.7,
+                                          "hit_count":  921,
+                                          "tested_users":  3000
+                                      },
+                                      {
+                                          "alpha":  0.8,
+                                          "hit_rate_percent":  32.2,
+                                          "hit_count":  966,
+                                          "tested_users":  3000
+                                      },
+                                      {
+                                          "alpha":  1.0,
+                                          "hit_rate_percent":  30.8,
+                                          "hit_count":  924,
+                                          "tested_users":  3000
+                                      }
+                                  ],
+    "best_alpha_under_50":  0.8,
+    "max_hit_rate_percent_under_50":  40.57,
+    "training_history_under_50":  [
+                                      {
+                                          "alpha":  0.0,
+                                          "hit_rate_percent":  7.6,
+                                          "hit_count":  228,
+                                          "tested_users":  3000
+                                      },
+                                      {
+                                          "alpha":  0.2,
+                                          "hit_rate_percent":  8.27,
+                                          "hit_count":  248,
+                                          "tested_users":  3000
+                                      },
+                                      {
+                                          "alpha":  0.4,
+                                          "hit_rate_percent":  22.63,
+                                          "hit_count":  679,
+                                          "tested_users":  3000
+                                      },
+                                      {
+                                          "alpha":  0.6,
+                                          "hit_rate_percent":  37.43,
+                                          "hit_count":  1123,
+                                          "tested_users":  3000
+                                      },
+                                      {
+                                          "alpha":  0.8,
+                                          "hit_rate_percent":  40.57,
+                                          "hit_count":  1217,
+                                          "tested_users":  3000
+                                      },
+                                      {
+                                          "alpha":  1.0,
+                                          "hit_rate_percent":  40.0,
+                                          "hit_count":  1200,
+                                          "tested_users":  3000
+                                      }
+                                  ],
+    "best_alpha_over_50":  1.0,
+    "max_hit_rate_percent_over_50":  37.37,
+    "training_history_over_50":  [
+                                     {
+                                         "alpha":  0.0,
+                                         "hit_rate_percent":  6.05,
+                                         "hit_count":  46,
+                                         "tested_users":  760
+                                     },
+                                     {
+                                         "alpha":  0.2,
+                                         "hit_rate_percent":  6.32,
+                                         "hit_count":  48,
+                                         "tested_users":  760
+                                     },
+                                     {
+                                         "alpha":  0.4,
+                                         "hit_rate_percent":  20.0,
+                                         "hit_count":  152,
+                                         "tested_users":  760
+                                     },
+                                     {
+                                         "alpha":  0.6,
+                                         "hit_rate_percent":  34.47,
+                                         "hit_count":  262,
+                                         "tested_users":  760
+                                     },
+                                     {
+                                         "alpha":  0.8,
+                                         "hit_rate_percent":  36.71,
+                                         "hit_count":  279,
+                                         "tested_users":  760
+                                     },
+                                     {
+                                         "alpha":  1.0,
+                                         "hit_rate_percent":  37.37,
+                                         "hit_count":  284,
+                                         "tested_users":  760
+                                     }
+                                 ]
+}
