@@ -30,6 +30,13 @@ TEST_USER = "EVALUATOR_BOT"
 EVAL_USERS_LIMIT = 1000
 EVAL_RANDOM_SEED = 43
 HOLDOUT_SIZE = 10
+BUCKET_ORDER = ("under_25", "under_50", "over_50", "unknown")
+BUCKET_LABELS = {
+    "under_25": "under 25 ",
+    "under_50": "under 50",
+    "over_50": "over 50",
+    "unknown": "Không xác định",
+}
 
 
 def load_hybrid_config():
@@ -56,6 +63,21 @@ def get_tuning_user_ids(config, history_df):
     return tuning_user_ids
 
 
+def build_user_bucket_lookup(history_df):
+    lookup = {}
+    for bucket_name, bucket_users in bucket_users_by_count(history_df).items():
+        for user_id in bucket_users:
+            lookup[user_id] = bucket_name
+    return lookup
+
+
+def empty_bucket_stats():
+    return {
+        bucket_name: {"tested": 0, "hits": 0, "precision_sum": 0.0}
+        for bucket_name in BUCKET_ORDER
+    }
+
+
 def main():
     try:
         user_input = input(
@@ -69,23 +91,20 @@ def main():
     print("Loading ALS-filtered dataset...")
     history_df = load_als_filtered_history(CSV_FILE)
     user_tracks_by_user = build_user_track_map(history_df)
+    user_bucket_lookup = build_user_bucket_lookup(history_df)
 
     config = load_hybrid_config()
     tuning_user_ids = get_tuning_user_ids(config, history_df)
     if config.get("dataset_mode") != DATASET_MODE_ALS_FILTERED:
         print("Warning: hybrid_config.json was not generated with ALS-filtered metadata.")
 
-    candidate_users = [
-        user_id
-        for user_id in user_tracks_by_user
-        if user_id not in tuning_user_ids
-    ]
+    candidate_users = list(user_tracks_by_user.keys())
 
     rng = random.Random(EVAL_RANDOM_SEED)
     test_users = rng.sample(candidate_users, min(eval_limit, len(candidate_users)))
 
     print(f"Found {len(candidate_users)} candidate eval users.")
-    print(f"Excluded {len(tuning_user_ids)} tuning users from evaluation.")
+    print(f"Included {len(tuning_user_ids)} tuning users in evaluation.")
     print("Starting hybrid offline evaluation...\n")
 
     total_tested = 0
@@ -94,6 +113,7 @@ def main():
     alpha_usage = Counter()
     leaked_seen_slots = 0
     total_recommendation_slots = 0
+    bucket_stats = empty_bucket_stats()
 
     for user_id in tqdm(test_users, desc="Evaluation progress", unit="user"):
         train_tracks, ground_truth = build_profile_split(
@@ -108,12 +128,14 @@ def main():
         profile_tracks = limit_profile_tracks(train_tracks)
         load_history_into_user(DB_FILE, TEST_USER, profile_tracks)
 
+        original_count = len(user_tracks_by_user[user_id])
         try:
             response = get_hybrid_recommendations(
                 TEST_USER,
                 exclude_user_ids=[user_id],
                 exclude_track_ids=train_tracks,
                 top_n=10,
+                original_num_listened=original_count
             )
         except Exception as exc:
             print(f"Error for {user_id}: {exc}")
@@ -131,10 +153,20 @@ def main():
         total_recommendation_slots += len(recommendations)
         alpha_usage[str(response.get("alpha", "unknown"))] += 1
 
+        precision_at_10 = len(hits) / 10
+        bucket_name = user_bucket_lookup.get(user_id, "unknown")
+        stats = bucket_stats.setdefault(
+            bucket_name,
+            {"tested": 0, "hits": 0, "precision_sum": 0.0},
+        )
+        stats["tested"] += 1
+        stats["precision_sum"] += precision_at_10
+
         total_tested += 1
         if hits:
             hit_count += 1
-        total_precision += len(hits) / 10
+            stats["hits"] += 1
+        total_precision += precision_at_10
 
     hit_rate = (hit_count / total_tested) * 100 if total_tested else 0.0
     avg_precision = (total_precision / total_tested) * 100 if total_tested else 0.0
@@ -147,13 +179,29 @@ def main():
         file.write(f"Holdout size: {HOLDOUT_SIZE}\n")
         file.write(f"Max profile tracks: {MAX_PROFILE_TRACKS}\n")
         file.write(f"Candidate eval users: {len(candidate_users)}\n")
-        file.write(f"Excluded tuning users: {len(tuning_user_ids)}\n")
+        file.write(f"Included tuning users: {len(tuning_user_ids)}\n")
         file.write(f"Tested users: {total_tested}\n")
         file.write("-" * 45 + "\n\n")
         file.write(f"1. Hybrid Hit Rate @ 10: {hit_rate:.2f}%\n")
         file.write(f"2. Hybrid Precision @ 10: {avg_precision:.2f}%\n")
         file.write(f"3. Seen-history leaks in recommendations: {leaked_seen_slots}\n")
         file.write(f"4. Recommendation slots returned: {total_recommendation_slots}\n\n")
+        file.write("Bucket metrics by ALS-filtered profile size:\n")
+        for bucket_name in BUCKET_ORDER:
+            stats = bucket_stats.get(bucket_name, {})
+            tested = stats.get("tested", 0)
+            if tested == 0:
+                continue
+
+            bucket_hr = (stats["hits"] / tested) * 100
+            bucket_precision = (stats["precision_sum"] / tested) * 100
+            label = BUCKET_LABELS.get(bucket_name, bucket_name)
+            file.write(
+                f"- {label}: users={tested}, "
+                f"HR@10={bucket_hr:.2f}%, "
+                f"Precision@10={bucket_precision:.2f}%\n"
+            )
+        file.write("\n")
         file.write("Alpha usage:\n")
         for alpha, count in sorted(alpha_usage.items(), key=lambda item: item[0]):
             file.write(f"- alpha={alpha}: {count} users\n")

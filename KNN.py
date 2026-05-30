@@ -3,22 +3,16 @@ import numpy as np
 from sklearn.preprocessing import MultiLabelBinarizer
 from sklearn.feature_extraction.text import TfidfVectorizer
 
-# =========================
 # 1. Đọc dữ liệu
-# =========================
 df = pd.read_csv(r"Music Info.csv")
 
-# =========================
 #  Loại bỏ trùng lặp
-# =========================
 if "spotify_id" in df.columns:
     df = df.drop_duplicates(subset=["spotify_id"]).reset_index(drop=True)
 else:
     df = df.drop_duplicates(subset=["name", "artist"]).reset_index(drop=True)
 
-# =========================
 #  Chọn đặc trưng số
-# =========================
 feature_cols = [
     "danceability",
     "energy",
@@ -39,9 +33,7 @@ feature_cols = [col for col in feature_cols if col in df.columns]
 # bỏ dòng thiếu dữ liệu ở numeric
 df = df.dropna(subset=feature_cols).reset_index(drop=True)
 
-# =========================
 #  Chuẩn hóa numeric features
-# =========================
 X_numeric = df[feature_cols].values.astype(np.float32)
 
 mean = X_numeric.mean(axis=0)
@@ -49,9 +41,7 @@ std = X_numeric.std(axis=0)
 std[std == 0] = 1.0
 
 X_numeric = (X_numeric - mean) / std
-# =========================
 #  Year feature
-# =========================
 if "year" in df.columns:
     X_year = df[["year"]].values.astype(np.float32)
 
@@ -62,11 +52,7 @@ if "year" in df.columns:
 else:
     X_year = np.empty((len(df), 0), dtype=np.float32)
 
-# =========================
 #  Xử lý TAGS bằng one-hot encoding
-# =========================
-
-
 df["tags"] = df["tags"].fillna("").astype(str).str.lower().str.strip()
 
 df["tags_list"] = df["tags"].apply(
@@ -76,10 +62,7 @@ df["tags_list"] = df["tags"].apply(
 mlb = MultiLabelBinarizer()
 X_tags = mlb.fit_transform(df["tags_list"]).astype(np.float32)
 
-
-# =========================
 #  Gán trọng số cho từng nhóm feature
-# =========================
 numeric_weight = 1.0
 tags_weight = 0.8
 year_weight = 0.3
@@ -89,9 +72,7 @@ X = np.hstack([
     X_year * year_weight
 ]).astype(np.float32)
 
-# =========================
 # Hàm cosine similarity
-# =========================
 def cosine_similarity(vec1, vec2):
     norm1 = np.linalg.norm(vec1)
     norm2 = np.linalg.norm(vec2)
@@ -101,9 +82,7 @@ def cosine_similarity(vec1, vec2):
 
     return np.dot(vec1, vec2) / (norm1 * norm2)
 
-# =========================
 #  Hàm cosine distance
-# =========================
 def cosine_distance(vec1, vec2):
     return 1 - cosine_similarity(vec1, vec2)
 
@@ -169,8 +148,6 @@ def recommend_from_recent_songs(recent_songs, top_n=5):
 
     # Lấy vector của các bài đã nghe
     recent_vectors = X[song_indices]
-
-    # Tạo vector đại diện bằng trung bình cộng
     query_vector = np.mean(recent_vectors, axis=0)
 
     # Tìm top bài gần nhất, loại bỏ các bài đã nghe

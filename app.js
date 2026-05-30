@@ -10,8 +10,7 @@ document.addEventListener("DOMContentLoaded", () => {
         document.getElementById("login-screen").style.display = "none";
         document.getElementById("main-app").style.display = "flex";
         
-        loadHistory();
-        loadHistoryRecommendations();
+        refreshAllRecommendationViews();
     } else {
         // Chưa đăng nhập
         document.getElementById("login-screen").style.display = "flex";
@@ -56,6 +55,70 @@ function handleLogout() {
     window.location.reload();
 } 
 
+let isLoginMode = true;
+
+function toggleAuthMode() {
+    isLoginMode = !isLoginMode;
+    const title = document.getElementById("form-title");
+    const authBtn = document.getElementById("auth-btn");
+    const rePass = document.getElementById("repasswordInput");
+    const toggleLink = document.getElementById("toggle-auth-link");
+    const errorTxt = document.getElementById("login-error");
+
+    errorTxt.innerText = "";
+    document.getElementById("usernameInput").value = "";
+    document.getElementById("passwordInput").value = "";
+    document.getElementById("repasswordInput").value = "";
+
+    if (isLoginMode) {
+        title.innerText = "Đăng Nhập";
+        authBtn.innerText = "Đăng Nhập";
+        authBtn.setAttribute("onclick", "handleLogin()");
+        rePass.style.display = "none";
+        toggleLink.innerText = "Chưa có tài khoản? Đăng ký ngay";
+    } else {
+        title.innerText = "Đăng Ký";
+        authBtn.innerText = "Đăng Ký";
+        authBtn.setAttribute("onclick", "handleRegister()");
+        rePass.style.display = "block";
+        toggleLink.innerText = "Đã có tài khoản? Đăng nhập";
+    }
+}
+
+async function handleRegister() {
+    const u = document.getElementById("usernameInput").value.trim();
+    const p = document.getElementById("passwordInput").value.trim();
+    const rp = document.getElementById("repasswordInput").value.trim();
+    const errorTxt = document.getElementById("login-error");
+
+    if (!u || !p || !rp) {
+        errorTxt.innerText = "Vui lòng nhập đủ thông tin!";
+        return;
+    }
+    if (p !== rp) {
+        errorTxt.innerText = "Mật khẩu không khớp!";
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE_URL}/register`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: u, password: p })
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            alert("Đăng ký thành công! Vui lòng đăng nhập.");
+            toggleAuthMode();
+        } else {
+            errorTxt.innerText = data.message;
+        }
+    } catch (error) {
+        console.error("Lỗi đăng ký:", error);
+    }
+}
+
 const HISTORY_FEEDBACK_PREFIX = "history_feedback";
 
 function getHistoryFeedbackKey(trackId) {
@@ -90,6 +153,15 @@ function clearHistoryFeedbackForCurrentUser() {
             localStorage.removeItem(key);
         }
     });
+}
+
+async function refreshAllRecommendationViews() {
+    await loadHistory(false);
+    await Promise.all([
+        loadHistoryRecommendations(),
+        loadMelodyRecommendations(),
+        loadHybridRecommendations()
+    ]);
 }
 
 // 1. Cập nhật hàm tạo HTML (Thêm tham số isHistory)
@@ -135,12 +207,15 @@ function createTrackHTML(track, index, isHistory = false) {
 // 2. Viết thêm hàm Xóa Lịch Sử
 async function deleteHistory(trackId) {
     try {
-        await fetch(`${API_BASE_URL}/users/${USER_ID}/history/${trackId}`, { method: 'DELETE' });
+        const response = await fetch(`${API_BASE_URL}/users/${USER_ID}/history/${trackId}`, { method: 'DELETE' });
+        if (!response.ok) {
+            throw new Error("Không thể xóa bài hát khỏi lịch sử.");
+        }
+
         localStorage.removeItem(getHistoryFeedbackKey(trackId));
         
-        // Sau khi xóa xong, tải lại giao diện lịch sử và gợi ý ALS
-        loadHistory();
-        loadHistoryRecommendations();
+        // Sau khi xóa xong, tải lại lịch sử và cả 3 thuật toán.
+        await refreshAllRecommendationViews();
     } catch (error) {
         console.error("Lỗi xóa lịch sử:", error);
     }
@@ -154,21 +229,24 @@ async function clearAllHistory() {
     }
 
     try {
-        await fetch(`${API_BASE_URL}/users/${USER_ID}/history/clear`, { method: 'DELETE' });
+        const response = await fetch(`${API_BASE_URL}/users/${USER_ID}/history/clear`, { method: 'DELETE' });
+        if (!response.ok) {
+            throw new Error("Không thể xóa toàn bộ lịch sử.");
+        }
+
         clearHistoryFeedbackForCurrentUser();
         
-        // Sau khi xóa xong, load lại toàn bộ giao diện (trở về Cold Start)
-        loadHistory();
-        loadHistoryRecommendations();
+        // Sau khi xóa xong, load lại toàn bộ giao diện và 3 khối gợi ý.
+        await refreshAllRecommendationViews();
     } catch (error) {
         console.error("Lỗi xóa toàn bộ lịch sử:", error);
     }
 }
 
 // 3. Sửa nhẹ hàm loadHistory (truyền thêm true vào createTrackHTML)
-async function loadHistory() {
+async function loadHistory(refreshRecommendations = true) {
     try {
-        const response = await fetch(`${API_BASE_URL}/users/${USER_ID}/history`);
+        const response = await fetch(`${API_BASE_URL}/users/${USER_ID}/history`, { cache: "no-store" });
         const data = await response.json();
         const historyList = document.getElementById("history-list");
         
@@ -177,6 +255,7 @@ async function loadHistory() {
         if (data.history.length === 0) {
             historyList.innerHTML = '<p class="loading" style="color: white;">Chưa có lịch sử nghe nhạc.</p>';
             document.getElementById("melody-recs").innerHTML = '<p class="loading">Hãy nghe 1 bài hát để nhận gợi ý nhé.</p>';
+            document.getElementById("hybrid-recs").innerHTML = '<p class="loading">Hãy nghe 1 bài hát để nhận gợi ý nhé.</p>';
             return;
         }
 
@@ -185,21 +264,23 @@ async function loadHistory() {
             historyList.innerHTML += createTrackHTML(track, index, true);
         });
 
-        loadMelodyRecommendations();
-        // Bên trong loadHistory(), sau khi gọi KNN
-        loadHybridRecommendations();
+        if (refreshRecommendations) {
+            loadMelodyRecommendations();
+            loadHybridRecommendations();
+        }
     } catch (error) {
         console.error("Lỗi tải lịch sử:", error);
     }
 }
 
 // 2. Fetch Gợi ý theo ALS (Lịch sử)
-// 2. Fetch Gợi ý theo ALS (Lịch sử)
 async function loadHistoryRecommendations() {
+    const recList = document.getElementById("history-recs");
+    recList.innerHTML = '<p class="loading">Đang tìm bài hát tương đồng...</p>';
+
     try {
-        const response = await fetch(`${API_BASE_URL}/recommendations/history/${USER_ID}`);
+        const response = await fetch(`${API_BASE_URL}/recommendations/history/${USER_ID}`, { cache: "no-store" });
         const data = await response.json();
-        const recList = document.getElementById("history-recs");
         
         recList.innerHTML = ""; // Xóa chữ loading cũ
         
@@ -225,8 +306,13 @@ async function loadHistoryRecommendations() {
 
 // 3. Fetch Gợi ý theo KNN (Giai điệu)
 async function loadMelodyRecommendations() {
+    const melodyTitle = document.getElementById("melody-title");
+    if (melodyTitle) {
+        melodyTitle.innerText = "Top 5 gợi ý theo giai điệu";
+    }
+
     try {
-        const response = await fetch(`${API_BASE_URL}/recommendations/melody/${USER_ID}`);
+        const response = await fetch(`${API_BASE_URL}/recommendations/melody/${USER_ID}`, { cache: "no-store" });
         const data = await response.json();
         const recList = document.getElementById("melody-recs");
         
@@ -297,19 +383,15 @@ function renderSearchResults(results) {
                 
                 try {
                     // 1. GỌI API THÊM VÀO LỊCH SỬ (Và bắt buộc phải đợi xong bằng 'await')
-                    await fetch(`${API_BASE_URL}/users/${USER_ID}/history/${track.track_id}`, { method: 'POST' });
+                    const response = await fetch(`${API_BASE_URL}/users/${USER_ID}/history/${track.track_id}`, { method: 'POST' });
+                    if (!response.ok) {
+                        throw new Error("Không thể thêm bài hát vào lịch sử.");
+                    }
                     
-                    // Đổi tiêu đề khối KNN để người dùng biết
-                    const knnTitle = document.querySelector('.recommendation-box:last-child h3');
-                    if(knnTitle) knnTitle.innerText = `Gợi ý giống: ${track.name}`;
                     document.getElementById('melody-recs').innerHTML = '<p class="loading">Đang phân tích âm thanh...</p>';
 
                     // 2. SAU KHI GHI XONG MỚI ĐỌC DỮ LIỆU
-                    // Gọi loadHistory() (bên trong nó sẽ tự động gọi luôn KNN cho bài mới nhất)
-                    loadHistory();
-                    loadHistoryRecommendations();
-                    // Bên trong sự kiện click tìm kiếm, sau khi gọi KNN
-                    loadHybridRecommendations();
+                    await refreshAllRecommendationViews();
 
                 } catch (error) {
                     console.error("Lỗi thêm vào lịch sử:", error);
@@ -330,52 +412,15 @@ document.addEventListener('click', (e) => {
     }
 });
 
-// --- LOGIC GỢI Ý HYBRID (Ô NHẬP SỐ) ---
-const alphaInput = document.getElementById("alpha-input");
-const betaInput = document.getElementById("beta-input");
-const applyHybridBtn = document.getElementById("apply-hybrid-btn");
-let currentHybridTrackId = null;
-
-// Tự động cân bằng khi gõ vào ô Lịch sử (ALS)
-alphaInput.addEventListener("input", (e) => {
-    let val = parseInt(e.target.value) || 0;
-    if (val > 100) val = 100;
-    if (val < 0) val = 0;
-    alphaInput.value = val;
-    betaInput.value = 100 - val; // Trừ đi để tổng luôn là 100
-});
-
-// Tự động cân bằng khi gõ vào ô Giai điệu (KNN)
-betaInput.addEventListener("input", (e) => {
-    let val = parseInt(e.target.value) || 0;
-    if (val > 100) val = 100;
-    if (val < 0) val = 0;
-    betaInput.value = val;
-    alphaInput.value = 100 - val; // Trừ đi để tổng luôn là 100
-});
-
-// Khi bấm nút Áp dụng
-applyHybridBtn.addEventListener("click", () => {
-    if (currentHybridTrackId) {
-        loadHybridRecommendations();
-    } else {
-        alert("Bạn cần chọn 1 bài hát từ thanh tìm kiếm trước khi áp dụng hệ số!");
-    }
-});
-
 // --- HÀM GỌI API HYBRID TỰ ĐỘNG ---
 async function loadHybridRecommendations() {
     const recList = document.getElementById("hybrid-recs");
-    const statusText = document.getElementById("hybrid-status");
-    recList.innerHTML = '<p class="loading">Đang dung hợp thuật toán...</p>';
+    recList.innerHTML = '<p class="loading">Đang tìm bài hát tương đồng...</p>';
     
     try {
-        const response = await fetch(`${API_BASE_URL}/recommendations/hybrid/${USER_ID}`);
+        const response = await fetch(`${API_BASE_URL}/recommendations/hybrid/${USER_ID}`, { cache: "no-store" });
         const data = await response.json();
         
-        const alphaPercent = Math.round(data.alpha * 100);
-        statusText.innerText = `${alphaPercent}% Lịch sử - ${100 - alphaPercent}% Giai điệu`;
-
         if (data.message || !data.recommendations || data.recommendations.length === 0) {
             recList.innerHTML = `<p class="loading">${data.message || "Chưa có dữ liệu."}</p>`;
             return;

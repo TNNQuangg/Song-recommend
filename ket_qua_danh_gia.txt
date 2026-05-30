@@ -4,15 +4,21 @@ Config dataset mode: als_filtered
 Eval random seed: 43
 Holdout size: 10
 Max profile tracks: 150
-Candidate eval users: 14410
-Excluded tuning users: 6760
-Tested users: 14410
+Candidate eval users: 21170
+Included tuning users: 6760
+Tested users: 21170
 ---------------------------------------------
 
-1. Hybrid Hit Rate @ 10: 32.65%
-2. Hybrid Precision @ 10: 5.33%
+1. Hybrid Hit Rate @ 10: 38.90%
+2. Hybrid Precision @ 10: 6.43%
 3. Seen-history leaks in recommendations: 0
-4. Recommendation slots returned: 144100
+4. Recommendation slots returned: 211700
+
+Bucket metrics by ALS-filtered profile size:
+- under 25 : users=15117, HR@10=37.15%, Precision@10=6.16%
+- under 50: users=5293, HR@10=43.85%, Precision@10=7.28%
+- over 50: users=760, HR@10=39.34%, Precision@10=5.96%
 
 Alpha usage:
-- alpha=0.8: 14410 users
+- alpha=0.8: 20410 users
+- alpha=1.0: 760 users

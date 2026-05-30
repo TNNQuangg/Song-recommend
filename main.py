@@ -6,12 +6,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import json
-
-# Import các thuật toán từ file của bạn
 from KNN import recommend_from_recent_songs as recommend_songs
 from rs_2 import Recommendation_System
 
-# --- TẢI DỮ LIỆU & MÔ HÌNH (Chỉ chạy 1 lần khi start server) ---
+#TẢI DỮ LIỆU & MÔ HÌNH
 print("Đang nạp dữ liệu và mô hình... Vui lòng đợi...")
 track_df = pd.read_csv("Music Info.csv") 
 
@@ -24,11 +22,9 @@ except FileNotFoundError:
     print("CẢNH BÁO: Không tìm thấy file train")
     als_model = None
 
-# --- BỔ SUNG: Tính toán và lưu Cache Top 5 bài hát thịnh hành ---
 print("Đang tính toán Top Thịnh Hành...")
 TOP_5_POPULAR_TRACKS = []
 try:
-    # Mở một kết nối tạm thời chỉ để lấy dữ liệu 1 lần
     temp_conn = sqlite3.connect('music_app.db')
     temp_conn.row_factory = sqlite3.Row
     popular_query = """
@@ -45,8 +41,7 @@ try:
 
 except Exception as e:
     print(f"CẢNH BÁO: Không thể tải Top Thịnh Hành: {e}")
-    TOP_5_POPULAR_TRACKS = []   # Không động vào als_model
-# ----------------------------------------------------------------
+    TOP_5_POPULAR_TRACKS = []
 
 app = FastAPI(title="Music Recommendation API")
 
@@ -73,18 +68,64 @@ def init_db():
     conn.commit()
     conn.close()
 
-# Gọi hàm khởi tạo ngay lập tức
 init_db()
 
-# 2. HÀM KẾT NỐI DB (Chỉ làm nhiệm vụ kết nối để đọc/ghi, không tạo bảng nữa)
+#HÀM KẾT NỐI DB
 def get_db_connection():
     conn = sqlite3.connect('music_app.db', timeout=10)
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.row_factory = sqlite3.Row
     return conn
-# ==============================================================
 
-# --- API 1: Lấy lịch sử nghe nhạc ---
+SIMILAR_SEARCH_MESSAGE = "Đang tìm bài hát tương đồng..."
+
+
+def get_recent_listened_tracks(conn, user_id, limit=5):
+    query = """
+        SELECT t.track_id, t.name, t.artist
+        FROM listening_history lh
+        JOIN tracks t ON lh.track_id = t.track_id
+        WHERE lh.user_id = ?
+        ORDER BY lh.updated_at DESC, lh.rowid DESC
+        LIMIT ?
+    """
+    return conn.execute(query, (user_id, limit)).fetchall()
+
+
+def find_als_clone_user(conn, local_tracks, blocked_user_ids=None, candidate_limit=200):
+    if not als_model or not local_tracks:
+        return None
+
+    unique_tracks = list(dict.fromkeys(local_tracks))
+    blocked_user_ids = list(dict.fromkeys(blocked_user_ids or []))
+    track_placeholders = ",".join(["?"] * len(unique_tracks))
+    params = unique_tracks[:]
+    blocked_clause = ""
+
+    if blocked_user_ids:
+        blocked_placeholders = ",".join(["?"] * len(blocked_user_ids))
+        blocked_clause = f"AND user_id NOT IN ({blocked_placeholders})"
+        params.extend(blocked_user_ids)
+
+    query = f"""
+        SELECT user_id, COUNT(track_id) as matching_score
+        FROM listening_history
+        WHERE track_id IN ({track_placeholders})
+          {blocked_clause}
+        GROUP BY user_id
+        ORDER BY matching_score DESC
+        LIMIT ?
+    """
+    params.append(candidate_limit)
+
+    for row in conn.execute(query, params).fetchall():
+        candidate_user_id = row["user_id"]
+        if candidate_user_id in als_model.u_map:
+            return candidate_user_id
+
+    return None
+
+#API 1: Lấy lịch sử nghe nhạc
 @app.get("/api/v1/users/{user_id}/history")
 def get_listening_history(user_id: str):
     conn = get_db_connection()
@@ -100,89 +141,60 @@ def get_listening_history(user_id: str):
     conn.close()
     return {"user_id": user_id, "history": [dict(row) for row in history]}
 
-# --- API 2: Gợi ý theo lịch sử (ALS + Popularity Fallback) ---
+#API 2: Gợi ý theo lịch sử (ALS)
 @app.get("/api/v1/recommendations/history/{user_id}")
 def get_history_based_recommendations(user_id: str):
     conn = get_db_connection()
     
     # 1. Lấy danh sách track_id mà Local User đã nghe
-    local_history = conn.execute(
-        "SELECT track_id FROM listening_history WHERE user_id = ?", 
-        (user_id,)
-    ).fetchall()
+    local_history = get_recent_listened_tracks(conn, user_id, limit=150)
     
     local_tracks = [row["track_id"] for row in local_history]
     num_tracks = len(local_tracks)
 
-    # 2. XỬ LÝ COLD START: Thay vì báo lỗi, trả về TOP 5 THỊNH HÀNH
+    # 2. XỬ LÝ COLD START
     if num_tracks <= 5:
+        conn.close()
         return {
             "message": f"🔥 Top Thịnh Hành (Nghe thêm {6 - num_tracks} bài để cá nhân hóa)",
             "recommendations": TOP_5_POPULAR_TRACKS
         }
 
-    # 3. TÌM USER TƯƠNG ĐỒNG (Khi đã nghe đủ 6 bài)
-    placeholders = ','.join(['?'] * num_tracks)
-    query = f"""
-        SELECT user_id, COUNT(track_id) as matching_score
-        FROM listening_history
-        WHERE track_id IN ({placeholders}) AND user_id != ?
-        GROUP BY user_id
-        ORDER BY matching_score DESC
-        LIMIT 1
-    """
-    params = local_tracks + [user_id]
-    best_match = conn.execute(query, params).fetchone()
+    # 3. TÌM USER TƯƠNG ĐỒNG
+    clone_user_id = find_als_clone_user(conn, local_tracks, blocked_user_ids=[user_id])
     conn.close()
-
-    if not best_match:
-        return {"message": "Gu âm nhạc của bạn quá độc đáo, chưa tìm thấy ai giống!", "recommendations": []}
-
-    clone_user_id = best_match["user_id"]
     
-    # 4. CHẠY ALS
-    if not als_model or clone_user_id not in als_model.u_map:
-        return {"message": "Đang cập nhật ma trận hệ thống...", "recommendations": []}
-        
+    if not clone_user_id:
+        return {"message": SIMILAR_SEARCH_MESSAGE, "recommendations": []}
+
     result_df = als_model.recommend_user(u_id=clone_user_id, track_df=track_df)
 
-    if isinstance(result_df, str):                          # ← Kiểm tra TRƯỚC
-        return {"message": "Lỗi dữ liệu từ ALS", "recommendations": []}
+    if isinstance(result_df, str):                        
+        return {"message": SIMILAR_SEARCH_MESSAGE, "recommendations": []}
 
-    result_df = result_df.merge(                            # ← Merge SAU, chắc chắn là DataFrame
+    result_df = result_df.merge(                         
         track_df[['track_id', 'artist']], on='track_id', how='left'
     )
 
     return {
         "user_id": user_id,
         "mapped_to_clone": clone_user_id, 
-        "message": "Gợi ý dành riêng cho bạn", # Đổi thông báo khi đã cá nhân hóa thành công
+        "message": "Gợi ý dành riêng cho bạn",
         "recommendations": result_df.fillna("").to_dict(orient="records")
     }
 
-# --- API 3: Gợi ý theo giai điệu (KNN) dùng 5 bài gần nhất ---
+#API 3: Gợi ý theo giai điệu (KNN)
 @app.get("/api/v1/recommendations/melody/{user_id}")
 def get_melody_based_recommendations(user_id: str):
     conn = get_db_connection()
-    # Lấy tối đa 5 bài nghe gần nhất của user
-    query = """
-        SELECT t.name, t.artist 
-        FROM listening_history lh
-        JOIN tracks t ON lh.track_id = t.track_id
-        WHERE lh.user_id = ?
-        ORDER BY lh.updated_at DESC, lh.rowid DESC
-        LIMIT 5
-    """
-    recent_tracks = conn.execute(query, (user_id,)).fetchall()
+    recent_tracks = get_recent_listened_tracks(conn, user_id, limit=5)
     conn.close()
     
     if not recent_tracks:
         return {"recommendations": [], "message": "Chưa có lịch sử nghe nhạc để gợi ý theo giai điệu."}
     
-    # Định dạng lại thành list of tuples cho KNN.py
     recent_songs = [(row["name"], row["artist"]) for row in recent_tracks]
     
-    # Gọi hàm từ KNN.py với danh sách bài hát
     result_df = recommend_songs(recent_songs=recent_songs, top_n=5)
     
     if isinstance(result_df, str): 
@@ -192,7 +204,7 @@ def get_melody_based_recommendations(user_id: str):
         "seed_tracks": recent_songs,
         "recommendations": result_df.fillna("").to_dict(orient="records")
     }
-# --- API 4: Tìm kiếm ---
+#API 4: Tìm kiếm
 @app.get("/api/v1/search")
 def search_tracks(q: str):
     conn = get_db_connection()
@@ -202,23 +214,20 @@ def search_tracks(q: str):
     conn.close()
     return {"query": q, "results": [dict(row) for row in results]}
 
-# --- API 5: Thêm bài hát vào lịch sử ---
+#API 5: Thêm bài hát vào lịch sử
 @app.post("/api/v1/users/{user_id}/history/{track_id}")
 def add_to_history(user_id: str, track_id: str):
     conn = get_db_connection()
     import datetime
     now = datetime.datetime.now()
 
-    # Kiểm tra xem bài hát đã có trong lịch sử chưa
     check_query = "SELECT playcount FROM listening_history WHERE user_id = ? AND track_id = ?"
     row = conn.execute(check_query, (user_id, track_id)).fetchone()
     
     if row:
-        # Nếu đã có: Tăng lượt nghe và cập nhật thời gian mới nhất
         update_query = "UPDATE listening_history SET playcount = playcount + 1, updated_at = ? WHERE user_id = ? AND track_id = ?"
         conn.execute(update_query, (now, user_id, track_id))
     else:
-        # Nếu chưa có: Thêm mới hoàn toàn
         insert_query = "INSERT INTO listening_history (user_id, track_id, playcount, updated_at) VALUES (?, ?, 1, ?)"
         conn.execute(insert_query, (user_id, track_id, now))
         
@@ -226,16 +235,17 @@ def add_to_history(user_id: str, track_id: str):
     conn.close()
     return {"message": "Đã thêm vào lịch sử"}
 
-# --- API 6: Xóa toàn bộ lịch sử của User ---
+#API 6: Xóa toàn bộ lịch sử của User
 @app.delete("/api/v1/users/{user_id}/history/clear")
 def clear_user_history(user_id: str):
     conn = get_db_connection()
-    conn.execute("DELETE FROM listening_history WHERE user_id = ?", (user_id,))
+    cursor = conn.execute("DELETE FROM listening_history WHERE user_id = ?", (user_id,))
+    deleted_count = cursor.rowcount
     conn.commit()
     conn.close()
-    return {"message": "Đã xóa toàn bộ lịch sử"}
+    return {"message": "Đã xóa toàn bộ lịch sử", "deleted_count": deleted_count}
 
-# --- API 7: Xóa bài hát khỏi lịch sử ---
+#API 7: Xóa bài hát khỏi lịch sử
 @app.delete("/api/v1/users/{user_id}/history/{track_id}")
 def remove_from_history(user_id: str, track_id: str):
     conn = get_db_connection()
@@ -243,18 +253,19 @@ def remove_from_history(user_id: str, track_id: str):
     conn.commit()
     conn.close()
     return {"message": "Đã xóa khỏi lịch sử"}
-
 class LoginRequest(BaseModel):
     username: str
     password: str
 
-# --- API 8: Đăng nhập ---
+#API 8: Đăng nhập
 @app.post("/api/v1/login")
 def login(req: LoginRequest):
+    username = req.username.strip()
+    password = req.password.strip()
     conn = get_db_connection()
     user = conn.execute(
         "SELECT user_id FROM users WHERE username = ? AND password = ?", 
-        (req.username, req.password)
+        (username, password)
     ).fetchone()
     conn.close()
     
@@ -262,48 +273,79 @@ def login(req: LoginRequest):
         return {"success": True, "user_id": user["user_id"]}
     return {"success": False, "message": "Sai tài khoản hoặc mật khẩu!"}
 
-# --- API 9: Gợi ý KẾT HỢP TỰ ĐỘNG (Dynamic Weighted Hybrid) ---
-def get_hybrid_recommendations(user_id, manual_alpha=None, exclude_user_ids=None, exclude_track_ids=None, top_n=5):
-    # 1. Lấy lịch sử nghe nhạc của User
-    conn = get_db_connection() # Dùng hàm helper đã có để có timeout và WAL
+#API 9: Đăng ký
+@app.post("/api/v1/register")
+def register(req: LoginRequest):
+    username = req.username.strip()
+    password = req.password.strip()
+
+    if not username or not password:
+        return {"success": False, "message": "Vui lòng nhập đủ thông tin!"}
+
+    conn = get_db_connection()
+    try:
+        user = conn.execute(
+            "SELECT username FROM users WHERE lower(username) = lower(?)",
+            (username,),
+        ).fetchone()
+        if user:
+            return {"success": False, "message": "Tên đăng nhập đã tồn tại!"}
+
+        import uuid
+        new_user_id = f"USER_{uuid.uuid4().hex[:12].upper()}"
+
+        conn.execute(
+            "INSERT INTO users (user_id, username, password) VALUES (?, ?, ?)",
+            (new_user_id, username, password)
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        return {"success": False, "message": "Tên đăng nhập đã tồn tại!"}
+    finally:
+        conn.close()
+
+    return {"success": True, "message": "Đăng ký thành công!"}
+
+#API 10: Gợi ý KẾT HỢP TỰ ĐỘNG
+def get_hybrid_recommendations(user_id, manual_alpha=None, exclude_user_ids=None, exclude_track_ids=None, top_n=5, original_num_listened=None):
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
     SELECT tracks.track_id, name, artist 
     FROM listening_history 
     JOIN tracks ON listening_history.track_id = tracks.track_id
     WHERE user_id = ? 
-    ORDER BY updated_at DESC LIMIT 150
+    ORDER BY updated_at DESC, listening_history.rowid DESC LIMIT 150
     """, (user_id,))
     recent_tracks = cursor.fetchall()
 
-    # KHẮC PHỤC LỖI 1: Định nghĩa local_tracks và num_tracks
     local_tracks = [row["track_id"] for row in recent_tracks]
     num_listened = len(local_tracks)
+    effective_num_listened = original_num_listened if original_num_listened is not None else num_listened
     blocked_track_ids = set(local_tracks)
     if exclude_track_ids:
         blocked_track_ids.update(exclude_track_ids)
     candidate_limit = max(50, min(500, top_n + len(blocked_track_ids)))
     
-    # --- LOGIC TÍNH ALPHA ĐỘNG ---
+    #LOGIC TÍNH ALPHA ĐỘNG
     if manual_alpha is not None:
         alpha = manual_alpha
     else:
-        # Tự động đọc file cấu hình nếu có
+        # Tự động đọc file cấu hình
         try:
             with open("hybrid_config.json", "r") as f:
                 config = json.load(f)
-                if num_listened <= 25:
-                    alpha = config.get("best_alpha_under_25", 0.3)
-                elif num_listened <= 50:
+                if effective_num_listened <= 25:
+                    alpha = config.get("best_alpha_under_25", 0.2)
+                elif effective_num_listened <= 50:
                     alpha = config.get("best_alpha_under_50", 0.6)
                 else:
                     alpha = config.get("best_alpha_over_50", 0.8)
         except (FileNotFoundError, json.JSONDecodeError):
-            if num_listened <= 25: alpha = 0.3
-            elif num_listened <= 50: alpha = 0.6
+            if effective_num_listened <= 25: alpha = 0.2
+            elif effective_num_listened <= 50: alpha = 0.6
             else: alpha = 0.8
             
-    # KHẮC PHỤC LỖI 2: Khởi tạo biến trước khi gọi
     als_dict = {} 
     clone_user_id = None
     
@@ -313,40 +355,21 @@ def get_hybrid_recommendations(user_id, manual_alpha=None, exclude_user_ids=None
     blocked_user_ids = list(dict.fromkeys(blocked_user_ids))
 
     if num_listened > 5:
-        placeholders = ','.join(['?'] * num_listened)
-        blocked_placeholders = ','.join(['?'] * len(blocked_user_ids))
-        query = f"""
-            SELECT user_id, COUNT(track_id) as matching_score
-            FROM listening_history
-            WHERE track_id IN ({placeholders})
-              AND user_id NOT IN ({blocked_placeholders})
-            GROUP BY user_id
-            ORDER BY matching_score DESC
-            LIMIT 1
-        """
-        best_match = conn.execute(query, local_tracks + blocked_user_ids).fetchone()
-        if best_match: 
-            clone_user_id = best_match["user_id"]
+        clone_user_id = find_als_clone_user(
+            conn,
+            local_tracks,
+            blocked_user_ids=blocked_user_ids,
+        )
             
     if clone_user_id and als_model and clone_user_id in als_model.u_map:
         als_df = als_model.recommend_user(u_id=clone_user_id, track_df=track_df, top_k=candidate_limit)
         if not isinstance(als_df, str):
-            # KHẮC PHỤC LỖI 3: Đồng bộ key thành "name"
-            # Cố gắng lấy "name" trước, nếu không có thì lấy "Tên bài hát"
             als_dict = {row["track_id"]: row["Score"] for row in als_df.to_dict('records')}
             
-    # --- 2. LẤY DỮ LIỆU KNN ---
+    #LẤY DỮ LIỆU KNN
     knn_dict = {}
-    knn_query = """
-        SELECT t.name, t.artist, lh.track_id
-        FROM listening_history lh
-        JOIN tracks t ON lh.track_id = t.track_id
-        WHERE lh.user_id = ?
-        ORDER BY lh.updated_at DESC, lh.rowid DESC
-        LIMIT 5
-    """
-    recent_tracks_db = conn.execute(knn_query, (user_id,)).fetchall()
-    conn.close() # Đóng DB một lần ở đây
+    recent_tracks_db = get_recent_listened_tracks(conn, user_id, limit=5)
+    conn.close()
     
     if recent_tracks_db:
         recent_songs = [(row["name"], row["artist"]) for row in recent_tracks_db]
@@ -355,9 +378,9 @@ def get_hybrid_recommendations(user_id, manual_alpha=None, exclude_user_ids=None
             knn_dict = {row["track_id"]: row["similarity_score"] for row in knn_df.to_dict('records')}
             
     if not als_dict and not knn_dict:
-        return {"message": "Chưa có đủ dữ liệu để kết hợp.", "recommendations": [], "alpha": alpha}
+        return {"message": SIMILAR_SEARCH_MESSAGE, "recommendations": [], "alpha": alpha}
         
-    # --- 3. CHUẨN HÓA VÀ TÍNH ĐIỂM HYBRID ---
+    #CHUẨN HÓA VÀ TÍNH ĐIỂM HYBRID
     all_tracks = set(als_dict.keys()).union(set(knn_dict.keys()))
     min_als, max_als = (min(als_dict.values()), max(als_dict.values())) if als_dict else (0, 1)
     min_knn, max_knn = (min(knn_dict.values()), max(knn_dict.values())) if knn_dict else (0, 1)
@@ -381,3 +404,8 @@ def get_hybrid_recommendations(user_id, manual_alpha=None, exclude_user_ids=None
             
     hybrid_list.sort(key=lambda x: x["hybrid_score"], reverse=True)
     return {"recommendations": hybrid_list[:top_n], "message": "", "alpha": alpha}
+
+
+@app.get("/api/v1/recommendations/hybrid/{user_id}")
+def get_hybrid_recommendations_api(user_id: str):
+    return get_hybrid_recommendations(user_id)

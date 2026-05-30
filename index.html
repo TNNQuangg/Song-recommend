@@ -9,10 +9,14 @@
 <body>
     <div id="login-screen" class="login-screen">
         <div class="login-box">
-            <h2>Đăng Nhập</h2>
+            <h2 id="form-title">Đăng Nhập</h2>
             <input type="text" id="usernameInput" placeholder="Tên đăng nhập">
             <input type="password" id="passwordInput" placeholder="Mật khẩu">
-            <button onclick="handleLogin()" class="login-btn">Đăng Nhập</button>
+            <input type="password" id="repasswordInput" placeholder="Nhập lại mật khẩu" style="display: none;">
+            <button id="auth-btn" onclick="handleLogin()" class="login-btn">Đăng Nhập</button>
+            <p class="toggle-form" style="text-align: center; font-size: 13px;">
+                <a href="#" onclick="toggleAuthMode()" id="toggle-auth-link" style="color: #4facfe; text-decoration: none;">Chưa có tài khoản? Đăng ký ngay</a>
+            </p>
             <p id="login-error" class="error-msg"></p>
         </div>
     </div>
@@ -42,24 +46,21 @@
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                     <h3 style="color: #4facfe; margin: 0;">Gợi ý Kết hợp (Hybrid)</h3>
                 </div>
-                
-                <div style="margin-bottom: 15px; font-size: 12px; color: #bbb; text-align: center; background: #242424; padding: 6px; border-radius: 6px;">
-                    Auto: <span id="hybrid-status" style="color: #fff; font-weight: bold;">Đang tải...</span>
-                </div>
 
                 <div id="hybrid-recs" class="track-list">
-                    <p class="loading">Hãy nghe 1 bài hát để phân tích...</p>
+                    <p class="loading">Đang tìm bài hát tương đồng...</p>
                 </div>
             </div>
+            
             <div class="recommendation-box">
                 <h3>Top 5 gợi ý theo lịch sử</h3>
                 <div id="history-recs" class="track-list">
-                    <p class="loading">Đang phân tích dữ liệu ALS...</p>
+                    <p class="loading">Đang tìm bài hát tương đồng...</p>
                 </div>
             </div>
 
             <div class="recommendation-box">
-                <h3>Top 5 gợi ý theo giai điệu</h3>
+                <h3 id="melody-title">Top 5 gợi ý theo giai điệu</h3>
                 <div id="melody-recs" class="track-list">
                     <p class="loading">Đang phân tích âm thanh bằng KNN...</p>
                 </div>
