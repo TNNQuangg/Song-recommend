@@ -9,7 +9,6 @@ MAX_PROFILE_TRACKS = 150
 
 
 def load_als_filtered_history(csv_file):
-    """Load listening history with the same preprocessing used by rs_2.py."""
     raw_df = pd.read_csv(csv_file)
     required_columns = {"user_id", "track_id", "playcount"}
     missing_columns = required_columns - set(raw_df.columns)
@@ -61,7 +60,6 @@ def limit_profile_tracks(track_ids, max_tracks=MAX_PROFILE_TRACKS):
 
 
 def build_profile_split(track_ids, holdout_size=5, seed=42):
-    # seed is kept for API compatibility; split is deterministic by track order.
     del seed
     deduped_tracks = list(dict.fromkeys(track_ids))
     if len(deduped_tracks) <= holdout_size:
